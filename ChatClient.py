@@ -61,6 +61,8 @@ class UIController(object):
 class ChatConsoleUI(object):
     def __init__(self):
         self.closed = False
+        self.bye_string = "###"
+        print "End your session by typing '%s'" % self.bye_string
 
     def is_closed(self):
         return self.closed
@@ -71,7 +73,7 @@ class ChatConsoleUI(object):
 
             if input:
                 m = input[0].readline().strip()
-                if m == "###":
+                if m == self.bye_string:
                     self.closed = True
                     return None
 
