@@ -61,7 +61,6 @@ class User(object):
 class UserPool():
     def __init__(self):
         self.user_models = {}
-        self.user_sockets = {}
 
     def register_user(self, username, ws):
         """
@@ -77,6 +76,11 @@ class UserPool():
 
         self.user_models[username].sockets.append(ws)
         return self.user_models[username]
+
+    def unregister(self, username, ws):
+        self.user_models[username].sockets.remove(ws)
+        if not self.user_models[username].sockets:
+            self.user_models.pop(username, None)
 
 
     def find_user(self, username):
@@ -150,6 +154,9 @@ class MessageController(object):
 
         ws.send("Invalid username.")
 
+    def socket_closed(self, ws):
+        if ws.user:
+            self.user_pool.unregister(ws.user.username, ws)
 
 
 class ChatAuth(object):
@@ -171,6 +178,8 @@ class ChatWebSocketServer(WebSocket):
         self.send("Welcome to ChatServer.")
         self.send("To authenticate enter your username.")
 
+    def closed(self, code, reason=None):
+        controller.socket_closed(self)
 
     def received_message(self, message):
         controller.process_message(message, self)

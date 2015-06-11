@@ -123,15 +123,33 @@ class UserPoolTest(TestCase):
 
 
     def test_create_user_when_username_already_taken(self):
-        connection1 = MagicMock()
-        connection2 = MagicMock()
+        ws1 = MagicMock()
+        ws2 = MagicMock()
         user_pool = UserPool()
-        user_pool.register_user("username", connection1)
-        user_pool.register_user("username", connection2)
+        user_pool.register_user("username", ws1)
+        user_pool.register_user("username", ws2)
 
         user = user_pool.find_user("username")
-        self.assertEquals(user.sockets[0], connection1)
-        self.assertEquals(user.sockets[1], connection2)
+        self.assertEquals(set(user.sockets), {ws1, ws2})
+
+    def test_user_removed_from_pool_on_all_ws_close(self):
+        ws1 = MagicMock()
+        ws2 = MagicMock()
+        user_pool = UserPool()
+        user_pool.register_user("username", ws1)
+        user_pool.register_user("username", ws2)
+
+        user = user_pool.find_user("username")
+        self.assertEquals(set(user.sockets), {ws1, ws2})
+
+        user_pool.unregister("username", ws1)
+
+        user = user_pool.find_user("username")
+        self.assertEquals(user.sockets, [ws2])
+
+        user_pool.unregister("username", ws2)
+        self.assertFalse ("username" in user_pool.user_models)
+
 
 
 class MessageControllerTest(TestCase):
@@ -221,3 +239,25 @@ class ChatWebSocketServerTest(TestCase):
         self.assertTrue(MessageModel.objects.get().delivered)
         ws2.send.assert_called_with(MessageUtils().make_message("from_user", "secret message"))
 
+    def test_messages_not_delivered_after_user_closes_connection(self):
+        ws1 = ChatWebSocketServer(MagicMock())
+        ws1.received_message("from_user")
+        ws2 = ChatWebSocketServer(MagicMock())
+        ws2.send = MagicMock()
+        ws2.received_message("to_user")
+
+        ws2.closed(1000)
+
+        ws1.received_message("@to_user secret message")
+
+        self.assertEquals(MessageModel.objects.count(), 1)
+        self.assertEquals(MessageModel.objects.get().message_text, "secret message")
+        self.assertFalse(MessageModel.objects.get().delivered)
+
+    def test_socket_closed_checks_for_un_authenticated_user(self):
+        ws1 = ChatWebSocketServer(MagicMock())
+
+        #should work w/o raising error
+        ws1.closed(1000)
+
+        
