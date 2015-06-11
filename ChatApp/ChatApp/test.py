@@ -1,8 +1,16 @@
-import unittest
-from ChatClient import UIController, ChatConsoleUI
-from ChatServer import MessageUtils, User, UserPool, ChatBackend
+from _sqlite3 import IntegrityError
+import os
+from ChatApp.models import MessageModel
+from ChatApp.server import ChatWebSocketServer
+
+print os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+from models import UserModel
+from client import UIController, ChatConsoleUI
+from server import MessageUtils, User, UserPool, MessageController
 from mock import MagicMock, Mock
-from unittest import TestCase
+from django.test import TestCase
+
+
 
 class UIControllerTest(TestCase):
     def setUp(self):
@@ -108,39 +116,108 @@ class UserPoolTest(TestCase):
     def test_create_user(self):
         connection = MagicMock()
         user_pool = UserPool()
-        user_pool.create_user("username", connection)
+        user_pool.register_user("username", connection)
 
-        user = user_pool.get_user("username")
-        self.assertEquals(user.connections[0], connection)
+        user = user_pool.find_user("username")
+        self.assertEquals(user.sockets[0], connection)
 
 
     def test_create_user_when_username_already_taken(self):
         connection1 = MagicMock()
         connection2 = MagicMock()
         user_pool = UserPool()
-        user_pool.create_user("username", connection1)
-        user_pool.create_user("username", connection2)
+        user_pool.register_user("username", connection1)
+        user_pool.register_user("username", connection2)
 
-        user = user_pool.get_user("username")
-        self.assertEquals(user.connections[0], connection1)
-        self.assertEquals(user.connections[1], connection2)
+        user = user_pool.find_user("username")
+        self.assertEquals(user.sockets[0], connection1)
+        self.assertEquals(user.sockets[1], connection2)
 
 
-class ChatBackendTest(TestCase):
-    def test_process_message_sends_message_to_destination(self):
-        message_text = "message"
-        from_username = "from_username"
-        to_username = "to_username"
+class MessageControllerTest(TestCase):
+    def test_route_message_sends_message_to_every_user_socket(self):
+        ws1 = MagicMock()
+        ws2 = MagicMock()
+        controller = MessageController()
 
-        user_pool = UserPool()
-        backend = ChatBackend(user_pool)
+        from_user = UserModel(username = "from_user")
+        from_user.save()
+
+        controller.user_pool.register_user("to_user", ws1)
+        controller.user_pool.register_user("to_user", ws2)
+
+        controller.send_message("@to_user some message", from_user)
+
+        ws1.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
+        ws2.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
+
+
+    def test_send_message_saves_message_when_user_in_pool(self):
         ws = MagicMock()
-        user_pool.create_user(to_username, ws)
-        backend.process_message("@" + to_username +" " + message_text, from_username)
-        ws.send.assert_called_with(MessageUtils().make_message(from_username, message_text))
+        controller = MessageController()
+
+        from_user = UserModel(username = "from_user")
+        from_user.save()
+
+        controller.user_pool.register_user("to_user", ws)
+        controller.send_message("@to_user some message", from_user)
+        self.assertEquals(MessageModel.objects.count(), 1)
+        self.assertTrue(MessageModel.objects.get().delivered)
+
+    def test_send_message_saves_message_when_user_in_database(self):
+        controller = MessageController()
+
+        from_user = UserModel(username = "from_user")
+        from_user.save()
+
+        from_user = UserModel(username = "to_user")
+        from_user.save()
 
 
+        controller.send_message("@to_user some message", from_user)
+        self.assertEquals(MessageModel.objects.count(), 1)
 
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_process_message_sends_alert_when_user_not_found(self):
+        ws = MagicMock()
+        ws.send = MagicMock()
+        controller = MessageController()
+        controller.user_pool.register_user("from_user", ws)
+
+        from_user = UserModel(username = "to_user")
+        from_user.save()
+
+        controller.process_message("@wrong_user some message", ws)
+        self.assertEquals(MessageModel.objects.count(), 0)
+        ws.send.assert_called_with("User does not exist.")
+
+
+class ChatWebSocketServerTest(TestCase):
+    def test_user_created_when_first_auth(self):
+        ws = ChatWebSocketServer(MagicMock())
+        ws.received_message("my_username")
+
+        self.assertEquals(UserModel.objects.count(), 1)
+        self.assertEquals(UserModel.objects.all()[0].username, "my_username")
+
+    def test_user_not_created_when_username_invalid(self):
+        ws = ChatWebSocketServer(MagicMock())
+        ws.received_message("bad username")
+
+        self.assertEquals(UserModel.objects.count(), 0)
+
+
+    def test_user_receives_message(self):
+        ws1 = ChatWebSocketServer(MagicMock())
+        ws1.received_message("from_user")
+        ws2 = ChatWebSocketServer(MagicMock())
+        ws2.send = MagicMock()
+        ws2.received_message("to_user")
+
+        ws1.received_message("@to_user secret message")
+
+        self.assertEquals(MessageModel.objects.count(), 1)
+        self.assertEquals(MessageModel.objects.get().message_text, "secret message")
+        self.assertTrue(MessageModel.objects.get().delivered)
+        ws2.send.assert_called_with(MessageUtils().make_message("from_user", "secret message"))
+
