@@ -31,7 +31,7 @@ class MessageUtils:
             if user.startswith('@') and message_text:
                 return user[1:], message_text
 
-        raise Exception("Message cannot be parsed: %s" % message)
+        raise Exception("Message could not be parsed.")
 
 class UserPool():
     def __init__(self):
@@ -75,7 +75,7 @@ class UserPool():
         return None
 
 
-class RouteMessageController(object):
+class ChatMessageController(object):
 
     def _route_message(self, msg):
         delivered = False
@@ -99,8 +99,8 @@ class RouteMessageController(object):
             msg = MessageModel(from_user=from_user, to_user=to_user, message_text=message_text)
             msg.delivered = self._route_message(msg)
             msg.save()
-            return True
-        return False
+        else:
+            raise Exception("User does not exist.")
 
 
     def process_message(self, message, ws):
@@ -111,8 +111,10 @@ class RouteMessageController(object):
         If the ws is associated to a user, then it tries to send the message to destination.
         """
 
-        if not self.send_message(message, ws.user):
-            ws.send("User does not exist.")
+        try:
+            self.send_message(message, ws.user)
+        except Exception, e:
+            ws.send(str(e))
 
 
     def authenticate(self, message, ws):
@@ -190,7 +192,7 @@ class ChatWebSocketServer(WebSocket):
         self.controller.process_message(message, self)
 
     def set_authenticated(self):
-        self.controller = RouteMessageController()
+        self.controller = ChatMessageController()
 
 
 user_pool = UserPool()

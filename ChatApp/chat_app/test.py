@@ -1,6 +1,6 @@
 import os
 from orm.models import MessageModel
-from server import ChatWebSocketServer, user_pool, RouteMessageController
+from server import ChatWebSocketServer, user_pool, ChatMessageController
 import server
 
 print os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -126,20 +126,20 @@ class UserPoolTest(TestCase):
 
 
 
-class MessageControllerTest(TestCase):
+class ChatMessageControllerTest(TestCase):
     def setUp(self):
         server.user_pool = UserPool()
 
     def test_route_message_sends_message_to_every_user_socket(self):
         ws1 = MagicMock()
         ws2 = MagicMock()
-        controller = RouteMessageController()
 
         from_user = UserModel(username = "from_user")
         from_user.save()
 
         server.user_pool.register_user("to_user", ws1)
         server.user_pool.register_user("to_user", ws2)
+        controller = ChatMessageController()
 
         controller.send_message("@to_user some message", from_user)
 
@@ -149,7 +149,7 @@ class MessageControllerTest(TestCase):
 
     def test_send_message_saves_message_when_user_in_pool(self):
         ws = MagicMock()
-        controller = RouteMessageController()
+        controller = ChatMessageController()
 
         from_user = UserModel(username = "from_user")
         from_user.save()
@@ -160,7 +160,7 @@ class MessageControllerTest(TestCase):
         self.assertTrue(MessageModel.objects.get().delivered)
 
     def test_send_message_saves_message_when_user_in_database(self):
-        controller = RouteMessageController()
+        controller = ChatMessageController()
 
         from_user = UserModel(username = "from_user")
         from_user.save()
@@ -182,9 +182,22 @@ class MessageControllerTest(TestCase):
         from_user = UserModel(username = "to_user")
         from_user.save()
 
-        RouteMessageController().process_message("@wrong_user some message", ws)
+        ChatMessageController().process_message("@wrong_user some message", ws)
         self.assertEquals(MessageModel.objects.count(), 0)
         ws.send.assert_called_with("User does not exist.")
+
+    def test_sends_error_message_when_cannot_parse_msg(self):
+        ws = MagicMock()
+        ws.send = MagicMock()
+
+        user_pool.register_user("from_user", ws)
+
+        from_user = UserModel(username = "to_user")
+        from_user.save()
+
+        ChatMessageController().process_message("bad message", ws)
+        self.assertEquals(MessageModel.objects.count(), 0)
+        ws.send.assert_called_with("Message could not be parsed.")
 
 
 class ChatWebSocketServerTest(TestCase):
