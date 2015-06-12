@@ -9,9 +9,8 @@ from ws4py.server.wsgiutils import WebSocketWSGIApplication
 
 class MessageUtils:
     def make_message(self, username, message_text):
-        """ Given a username and text, this returns the full message to be sent
-        to the user.
-        """
+        """ Given a username and text, this formats the message to be sent to the user."""
+
         if username and message_text:
             return "@" + str(username) + " >> " + message_text
 
@@ -22,6 +21,7 @@ class MessageUtils:
         Given a text message including the username and actual message, parses
         the message into username and actual message_text
         """
+
         tokens = str(message).split(None, 1)
 
         if len(tokens) == 2:
@@ -79,10 +79,7 @@ class UserPool():
 class ChatMessageController(object):
     def process_message(self, message, ws):
         """
-        Takes a message from a websocket and takes the appropriate action.
-        If the ws does not have a user, then uses the message to authenticate user
-          and create it in the database.  It keeps track of the users and associated ws.
-        If the ws is associated to a user, then it tries to send the message to destination.
+        Takes a message from a websocket and tries to send the message to destination.
         """
 
         try:
