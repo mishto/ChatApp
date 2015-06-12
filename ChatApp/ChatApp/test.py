@@ -5,9 +5,9 @@ from ChatApp.server import ChatWebSocketServer
 
 print os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 from models import UserModel
-from client import UIController, ChatConsoleUI
-from server import MessageUtils, User, UserPool, MessageController
-from mock import MagicMock, Mock
+from client import UIController
+from server import MessageUtils, UserPool, MessageController
+from mock import MagicMock, call
 from django.test import TestCase
 
 
@@ -18,7 +18,6 @@ class UIControllerTest(TestCase):
         self.ui = MagicMock()
 
         self.controller = UIController(self.ws_client, self.ui)
-
         self.ws_client.connect = MagicMock()
 
 
@@ -87,31 +86,6 @@ class MessageUtilsTest(TestCase):
         self.assertRaises(Exception, MessageUtils().parse_message, message)
 
 
-class UserTest(TestCase):
-    def test_send_message(self):
-        username = "username"
-        message_text = "message text"
-        connection = MagicMock()
-
-        user = User(username, connection)
-        user.send_message(message_text, from_username=username)
-
-        message = MessageUtils().make_message(username, message_text)
-        connection.send.assert_called_with(message)
-
-    def test_send_message_sends_to_all_connections(self):
-        username = "username"
-        message_text = "message text"
-        connection1 = MagicMock()
-        connection2 = MagicMock()
-        user = User(username, connection1)
-        user.add_connection(connection2)
-
-        user.send_message(message_text, from_username=username)
-        message = MessageUtils().make_message(username, message_text)
-        connection1.send.assert_called_with(message)
-        connection2.send.assert_called_with(message)
-
 class UserPoolTest(TestCase):
     def test_create_user(self):
         connection = MagicMock()
@@ -153,6 +127,10 @@ class UserPoolTest(TestCase):
 
 
 class MessageControllerTest(TestCase):
+    def setUp(self):
+        server.controller = MessageController()
+
+
     def test_route_message_sends_message_to_every_user_socket(self):
         ws1 = MagicMock()
         ws2 = MagicMock()
@@ -209,8 +187,11 @@ class MessageControllerTest(TestCase):
         self.assertEquals(MessageModel.objects.count(), 0)
         ws.send.assert_called_with("User does not exist.")
 
-
+import server
 class ChatWebSocketServerTest(TestCase):
+    def setUp(self):
+        server.controller = MessageController()
+
     def test_user_created_when_first_auth(self):
         ws = ChatWebSocketServer(MagicMock())
         ws.received_message("my_username")
@@ -226,17 +207,26 @@ class ChatWebSocketServerTest(TestCase):
 
 
     def test_user_receives_message(self):
+        #auth from_user
         ws1 = ChatWebSocketServer(MagicMock())
         ws1.received_message("from_user")
+
+        #auth to_user
         ws2 = ChatWebSocketServer(MagicMock())
         ws2.send = MagicMock()
         ws2.received_message("to_user")
 
+        #from_user socket received message for to_user
         ws1.received_message("@to_user secret message")
 
+        #message has been saved
         self.assertEquals(MessageModel.objects.count(), 1)
         self.assertEquals(MessageModel.objects.get().message_text, "secret message")
+
+        #message has been saved as delivered
         self.assertTrue(MessageModel.objects.get().delivered)
+
+        #and indeed the send function for to_user has been called
         ws2.send.assert_called_with(MessageUtils().make_message("from_user", "secret message"))
 
     def test_messages_not_delivered_after_user_closes_connection(self):
@@ -260,4 +250,48 @@ class ChatWebSocketServerTest(TestCase):
         #should work w/o raising error
         ws1.closed(1000)
 
-        
+
+    def test_user_can_diconnect_and_connect_again(self):
+        ws = ChatWebSocketServer(MagicMock())
+        ws.received_message("to_user")
+        ws.closed(1000)
+
+        ws = ChatWebSocketServer(MagicMock())
+        ws.received_message("to_user")
+
+
+    def test_user_receives_offline_messages_when_connecting(self):
+        ws1 = ChatWebSocketServer(MagicMock())
+        ws1.received_message("from_user")
+
+        #connecting and disconnecting to_user
+        ws2 = ChatWebSocketServer(MagicMock())
+        ws2.send = MagicMock()
+        ws2.received_message("to_user")
+        ws2.closed(1000)
+
+        #to_user receives a message while offline
+        ws1.received_message("@to_user first message")
+        ws1.received_message("@to_user second message")
+
+        #message has been set to not delivered in DB
+        offline_messages = MessageModel.objects.filter()
+        self.assertFalse(offline_messages[0].delivered)
+        self.assertFalse(offline_messages[1].delivered)
+
+        #connecting to_user again
+        ws2 = ChatWebSocketServer(MagicMock())
+        ws2.send = MagicMock()
+        ws2.received_message("to_user")
+
+        #message has been set to delivered in DB
+        offline_messages = MessageModel.objects.filter()
+        self.assertTrue(offline_messages[0].delivered)
+        self.assertTrue(offline_messages[1].delivered)
+
+
+        #and has been actually delivered
+
+        calls = [call(MessageUtils().make_message("from_user", "first message")),
+                 call(MessageUtils().make_message("from_user", "second message"))]
+        ws2.send.assert_has_calls(calls, any_order=True)

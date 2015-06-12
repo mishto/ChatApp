@@ -1,9 +1,10 @@
 from gevent import monkey
-from ChatApp.models import UserModel, MessageModel
+import os
 
 monkey.patch_all(socket=True, dns=True, time=True, select=True,thread=False,
     os=True, ssl=True, httplib=False, aggressive=True)
 
+from models import UserModel, MessageModel
 from ws4py.websocket import WebSocket
 from ws4py.server.geventserver import WSGIServer
 from ws4py.server.wsgiutils import WebSocketWSGIApplication
@@ -36,28 +37,6 @@ class MessageUtils:
 
         raise Exception("Message cannot be parsed: %s" % message)
 
-
-class User(object):
-    def __init__(self, username, connection = None, ):
-        self.username = username
-        if connection:
-            self.connections = [connection]
-        else:
-            self.connections = []
-
-    def send_message(self, message_text, from_username):
-        message = MessageUtils().make_message(from_username, message_text)
-        for connection in self.connections:
-            connection.send(message)
-
-    def add_connection(self, connection):
-        self.connections.append(connection)
-
-    def save(self):
-        user = UserModel(username = self.username)
-        user.save()
-
-
 class UserPool():
     def __init__(self):
         self.user_models = {}
@@ -70,8 +49,8 @@ class UserPool():
         """
 
         if username not in self.user_models:
-            user = UserModel(username = username)
-            user.save()
+            user, dummy = UserModel.objects.get_or_create(username = username)
+
             self.user_models[username] = user
 
         self.user_models[username].sockets.append(ws)
@@ -144,6 +123,15 @@ class MessageController(object):
                 ws.send("User does not exist.")
         else:
             self.authenticate(message, ws)
+            if ws.user:
+                offline_messages = MessageModel.objects.filter(to_user = ws.user, delivered = False)
+                for message in offline_messages:
+                    message.delivered = True
+                    message.save()
+
+                    username = message.from_user.username
+                    text = message.message_text
+                    ws.send(MessageUtils().make_message(username, text))
 
     def authenticate(self, message, ws):
         auth = ChatAuth()
@@ -152,7 +140,8 @@ class MessageController(object):
             ws.authenticated = True
             ws.user = self.user_pool.register_user(username, ws)
 
-        ws.send("Invalid username.")
+        else:
+            ws.send("Invalid username.")
 
     def socket_closed(self, ws):
         if ws.user:
