@@ -31,7 +31,6 @@ class MessageUtils:
             if user.startswith('@') and message_text:
                 return user[1:], message_text
 
-
         raise Exception("Message cannot be parsed: %s" % message)
 
 class UserPool():
@@ -76,10 +75,7 @@ class UserPool():
         return None
 
 
-class MessageController(object):
-    def __init__(self):
-        self.user_pool = UserPool()
-
+class RouteMessageController(object):
 
     def _route_message(self, msg):
         delivered = False
@@ -98,7 +94,7 @@ class MessageController(object):
          If the destination user is not found returns False.  Otherwise returns True.
         """
         to_username, message_text = MessageUtils().parse_message(message)
-        to_user = self.user_pool.find_user(to_username)
+        to_user = user_pool.find_user(to_username)
         if to_user:
             msg = MessageModel(from_user=from_user, to_user=to_user, message_text=message_text)
             msg.delivered = self._route_message(msg)
@@ -115,37 +111,60 @@ class MessageController(object):
         If the ws is associated to a user, then it tries to send the message to destination.
         """
 
-        if ws.user:
-            if not self.send_message(message, ws.user):
-                ws.send("User does not exist.")
-        else:
-            self.authenticate(message, ws)
-            if ws.user:
-                offline_messages = MessageModel.objects.filter(to_user = ws.user, delivered = False)
-                for message in offline_messages:
-                    message.delivered = True
-                    message.save()
+        if not self.send_message(message, ws.user):
+            ws.send("User does not exist.")
 
-                    username = message.from_user.username
-                    text = message.message_text
-                    ws.send(MessageUtils().make_message(username, text))
 
     def authenticate(self, message, ws):
-        auth = ChatAuth()
+        auth = Authentication()
         username = auth.authenticate(username = message)
         if username:
             ws.authenticated = True
-            ws.user = self.user_pool.register_user(username, ws)
+            ws.user = user_pool.register_user(username, ws)
 
         else:
             ws.send("Invalid username.")
 
     def socket_closed(self, ws):
         if ws.user:
-            self.user_pool.unregister(ws.user.username, ws)
+            user_pool.unregister(ws.user.username, ws)
 
 
-class ChatAuth(object):
+class AuthenticateMessageController(object):
+    def process_message(self, message, ws):
+        """
+        It uses a websocket message to authenticate the ws.
+        """
+
+        self.authenticate_socket(message, ws)
+        if ws.user:
+            offline_messages = MessageModel.objects.filter(to_user = ws.user, delivered = False)
+            for message in offline_messages:
+                message.delivered = True
+                message.save()
+
+                username = message.from_user.username
+                text = message.message_text
+                ws.send(MessageUtils().make_message(username, text))
+
+            ws.set_authenticated()
+
+
+    def authenticate_socket(self, message, ws):
+        username = Authentication().authenticate(username = message)
+        if username:
+            ws.authenticated = True
+            ws.user = user_pool.register_user(username, ws)
+
+        else:
+            ws.send("Invalid username.")
+
+
+    def socket_closed(self, ws):
+        pass
+
+
+class Authentication(object):
     def authenticate(self, username):
         username = str(username)
         if len(username.split()) == 1:
@@ -156,7 +175,7 @@ class ChatAuth(object):
 class ChatWebSocketServer(WebSocket):
     def __init__(self, *args, **kwargs):
         WebSocket.__init__(self, *args, **kwargs)
-        self.authenticated = False
+        self.controller = AuthenticateMessageController()
         self.user = None
 
 
@@ -165,17 +184,16 @@ class ChatWebSocketServer(WebSocket):
         self.send("To authenticate enter your username.")
 
     def closed(self, code, reason=None):
-        controller.socket_closed(self)
+        self.controller.socket_closed(self)
 
     def received_message(self, message):
-        controller.process_message(message, self)
+        self.controller.process_message(message, self)
+
+    def set_authenticated(self):
+        self.controller = RouteMessageController()
 
 
-    def is_authenticated(self):
-        return self.authenticated
-
-
-controller = MessageController()
+user_pool = UserPool()
 
 if __name__ == "__main__":
     server = WSGIServer(('127.0.0.1', 9000), WebSocketWSGIApplication(handler_cls=ChatWebSocketServer))

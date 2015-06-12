@@ -1,11 +1,12 @@
 import os
 from orm.models import MessageModel
-from server import ChatWebSocketServer
+from server import ChatWebSocketServer, user_pool, RouteMessageController
+import server
 
 print os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 from orm.models import UserModel
 from client import UIController
-from server import MessageUtils, UserPool, MessageController
+from server import MessageUtils, UserPool
 from mock import MagicMock, call
 from django.test import TestCase
 
@@ -127,19 +128,18 @@ class UserPoolTest(TestCase):
 
 class MessageControllerTest(TestCase):
     def setUp(self):
-        server.controller = MessageController()
-
+        server.user_pool = UserPool()
 
     def test_route_message_sends_message_to_every_user_socket(self):
         ws1 = MagicMock()
         ws2 = MagicMock()
-        controller = MessageController()
+        controller = RouteMessageController()
 
         from_user = UserModel(username = "from_user")
         from_user.save()
 
-        controller.user_pool.register_user("to_user", ws1)
-        controller.user_pool.register_user("to_user", ws2)
+        server.user_pool.register_user("to_user", ws1)
+        server.user_pool.register_user("to_user", ws2)
 
         controller.send_message("@to_user some message", from_user)
 
@@ -149,18 +149,18 @@ class MessageControllerTest(TestCase):
 
     def test_send_message_saves_message_when_user_in_pool(self):
         ws = MagicMock()
-        controller = MessageController()
+        controller = RouteMessageController()
 
         from_user = UserModel(username = "from_user")
         from_user.save()
 
-        controller.user_pool.register_user("to_user", ws)
+        server.user_pool.register_user("to_user", ws)
         controller.send_message("@to_user some message", from_user)
         self.assertEquals(MessageModel.objects.count(), 1)
         self.assertTrue(MessageModel.objects.get().delivered)
 
     def test_send_message_saves_message_when_user_in_database(self):
-        controller = MessageController()
+        controller = RouteMessageController()
 
         from_user = UserModel(username = "from_user")
         from_user.save()
@@ -176,20 +176,20 @@ class MessageControllerTest(TestCase):
     def test_process_message_sends_alert_when_user_not_found(self):
         ws = MagicMock()
         ws.send = MagicMock()
-        controller = MessageController()
-        controller.user_pool.register_user("from_user", ws)
+
+        user_pool.register_user("from_user", ws)
 
         from_user = UserModel(username = "to_user")
         from_user.save()
 
-        controller.process_message("@wrong_user some message", ws)
+        RouteMessageController().process_message("@wrong_user some message", ws)
         self.assertEquals(MessageModel.objects.count(), 0)
         ws.send.assert_called_with("User does not exist.")
 
-import server
+
 class ChatWebSocketServerTest(TestCase):
     def setUp(self):
-        server.controller = MessageController()
+        server.user_pool = UserPool()
 
     def test_user_created_when_first_auth(self):
         ws = ChatWebSocketServer(MagicMock())
