@@ -131,17 +131,16 @@ class ChatMessageControllerTest(TestCase):
         server.user_pool = UserPool()
 
     def test_route_message_sends_message_to_every_user_socket(self):
+        ws = MagicMock()
+        server.user_pool.register_user("from_user", ws)
+
         ws1 = MagicMock()
         ws2 = MagicMock()
-
-        from_user = UserModel(username = "from_user")
-        from_user.save()
-
         server.user_pool.register_user("to_user", ws1)
         server.user_pool.register_user("to_user", ws2)
         controller = ChatMessageController()
 
-        controller.send_message("@to_user some message", from_user)
+        controller.process_message("@to_user some message", ws)
 
         ws1.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
         ws2.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
@@ -151,25 +150,25 @@ class ChatMessageControllerTest(TestCase):
         ws = MagicMock()
         controller = ChatMessageController()
 
-        from_user = UserModel(username = "from_user")
-        from_user.save()
+        ws1 = MagicMock()
+        server.user_pool.register_user("from_user", ws1)
 
         server.user_pool.register_user("to_user", ws)
-        controller.send_message("@to_user some message", from_user)
+        controller.process_message("@to_user some message", ws1)
         self.assertEquals(MessageModel.objects.count(), 1)
         self.assertTrue(MessageModel.objects.get().delivered)
 
     def test_send_message_saves_message_when_user_in_database(self):
         controller = ChatMessageController()
 
-        from_user = UserModel(username = "from_user")
-        from_user.save()
+        ws = MagicMock()
+        server.user_pool.register_user("from_user", ws)
 
         from_user = UserModel(username = "to_user")
         from_user.save()
 
 
-        controller.send_message("@to_user some message", from_user)
+        controller.process_message("@to_user some message", ws)
         self.assertEquals(MessageModel.objects.count(), 1)
 
 

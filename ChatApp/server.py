@@ -50,7 +50,8 @@ class UserPool():
             self.user_models[username] = user
 
         self.user_models[username].sockets.append(ws)
-        return self.user_models[username]
+
+        ws.user = self.user_models[username]
 
     def unregister(self, username, ws):
         self.user_models[username].sockets.remove(ws)
@@ -72,10 +73,31 @@ class UserPool():
                 user = user[0]
                 return user
 
-        return None
+        raise Exception("User does not exist.")
 
 
 class ChatMessageController(object):
+    def process_message(self, message, ws):
+        """
+        Takes a message from a websocket and takes the appropriate action.
+        If the ws does not have a user, then uses the message to authenticate user
+          and create it in the database.  It keeps track of the users and associated ws.
+        If the ws is associated to a user, then it tries to send the message to destination.
+        """
+
+        try:
+            to_username, message_text = MessageUtils().parse_message(message)
+            to_user = user_pool.find_user(to_username)
+            msg = MessageModel(from_user=ws.user, to_user=to_user, message_text=message_text)
+            msg.delivered = self._route_message(msg)
+            msg.save()
+
+        except Exception, e:
+            ws.send(str(e))
+
+    def socket_closed(self, ws):
+        if ws.user:
+            user_pool.unregister(ws.user.username, ws)
 
     def _route_message(self, msg):
         delivered = False
@@ -88,82 +110,41 @@ class ChatMessageController(object):
         return delivered
 
 
-    def send_message(self, message, from_user):
-        """
-        Attempts to send a message and/or save the message to the database.
-         If the destination user is not found returns False.  Otherwise returns True.
-        """
-        to_username, message_text = MessageUtils().parse_message(message)
-        to_user = user_pool.find_user(to_username)
-        if to_user:
-            msg = MessageModel(from_user=from_user, to_user=to_user, message_text=message_text)
-            msg.delivered = self._route_message(msg)
-            msg.save()
-        else:
-            raise Exception("User does not exist.")
-
-
-    def process_message(self, message, ws):
-        """
-        Takes a message from a websocket and takes the appropriate action.
-        If the ws does not have a user, then uses the message to authenticate user
-          and create it in the database.  It keeps track of the users and associated ws.
-        If the ws is associated to a user, then it tries to send the message to destination.
-        """
-
-        try:
-            self.send_message(message, ws.user)
-        except Exception, e:
-            ws.send(str(e))
-
-
-    def authenticate(self, message, ws):
-        auth = Authentication()
-        username = auth.authenticate(username = message)
-        if username:
-            ws.authenticated = True
-            ws.user = user_pool.register_user(username, ws)
-
-        else:
-            ws.send("Invalid username.")
-
-    def socket_closed(self, ws):
-        if ws.user:
-            user_pool.unregister(ws.user.username, ws)
-
-
 class AuthenticateMessageController(object):
     def process_message(self, message, ws):
         """
         It uses a websocket message to authenticate the ws.
         """
 
-        self.authenticate_socket(message, ws)
+        self._authenticate_socket(message, ws)
         if ws.user:
             offline_messages = MessageModel.objects.filter(to_user = ws.user, delivered = False)
-            for message in offline_messages:
-                message.delivered = True
-                message.save()
-
-                username = message.from_user.username
-                text = message.message_text
-                ws.send(MessageUtils().make_message(username, text))
-
+            self._send_offline_messages(offline_messages, ws)
             ws.set_authenticated()
 
 
-    def authenticate_socket(self, message, ws):
+    def socket_closed(self, ws):
+        pass
+
+
+    def _authenticate_socket(self, message, ws):
         username = Authentication().authenticate(username = message)
         if username:
             ws.authenticated = True
-            ws.user = user_pool.register_user(username, ws)
+            user_pool.register_user(username, ws)
 
         else:
             ws.send("Invalid username.")
 
 
-    def socket_closed(self, ws):
-        pass
+    def _send_offline_messages(self, offline_messages, ws):
+        for message in offline_messages:
+            username = message.from_user.username
+            text = message.message_text
+            message_text = MessageUtils().make_message(username, text)
+            ws.send(message_text)
+            message.delivered = True
+            message.save()
 
 
 class Authentication(object):
