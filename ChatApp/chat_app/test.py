@@ -1,10 +1,9 @@
-from _sqlite3 import IntegrityError
 import os
-from ChatApp.models import MessageModel
-from ChatApp.server import ChatWebSocketServer
+from orm.models import MessageModel
+from server import ChatWebSocketServer
 
 print os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-from models import UserModel
+from orm.models import UserModel
 from client import UIController
 from server import MessageUtils, UserPool, MessageController
 from mock import MagicMock, call

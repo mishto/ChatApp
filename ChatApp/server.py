@@ -1,10 +1,7 @@
-from gevent import monkey
-import os
+#from gevent import monkey; monkey.patch_all(socket=True, dns=True, time=True, select=True,thread=False,
+#    os=True, ssl=True, httplib=False, aggressive=True)
 
-monkey.patch_all(socket=True, dns=True, time=True, select=True,thread=False,
-    os=True, ssl=True, httplib=False, aggressive=True)
-
-from models import UserModel, MessageModel
+from orm.models import UserModel, MessageModel
 from ws4py.websocket import WebSocket
 from ws4py.server.geventserver import WSGIServer
 from ws4py.server.wsgiutils import WebSocketWSGIApplication
@@ -183,5 +180,4 @@ controller = MessageController()
 if __name__ == "__main__":
     server = WSGIServer(('127.0.0.1', 9000), WebSocketWSGIApplication(handler_cls=ChatWebSocketServer))
     server.serve_forever()
-
 
