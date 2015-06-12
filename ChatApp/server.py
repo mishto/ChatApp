@@ -117,6 +117,7 @@ class AuthenticateMessageController(object):
         if ws.user:
             offline_messages = MessageModel.objects.filter(to_user = ws.user, delivered = False)
             self._send_offline_messages(offline_messages, ws)
+            ws.send("Authentication successful.  Write a message like this: '@username your message' ")
             ws.set_authenticated()
 
 
