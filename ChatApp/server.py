@@ -1,5 +1,7 @@
 #from gevent import monkey; monkey.patch_all(socket=True, dns=True, time=True, select=True,thread=False,
 #    os=True, ssl=True, httplib=False, aggressive=True)
+from gevent.greenlet import Greenlet
+import redis
 
 from orm.models import UserModel, MessageModel
 from ws4py.websocket import WebSocket
@@ -33,9 +35,45 @@ class MessageUtils:
 
         raise Exception("Message could not be parsed.")
 
+
+class RedisAdapter():
+    def __init__(self):
+        self.subscriptions = {}
+        self.redis = redis.StrictRedis(host='localhost', port=6379, db=0)
+
+    def is_user_stored(self, username):
+        return username in self.subscriptions.keys()
+
+    def add_connection(self, username, ws):
+        """
+        Ads ws to the key username.
+        """
+
+        subscriber = self.redis.pubsub()
+        subscriber.subscribe(username)
+        g_listener = Greenlet(self._listen_to_channel, subscriber, ws.send)
+        g_listener.start()
+        ws.greenlet_listener = g_listener
+
+        if self.is_user_stored(username):
+            self.subscriptions[username].append(ws)
+        else:
+            self.subscriptions[username] = [ws]
+
+
+    def send_message_to_channel(self, channel, message):
+        self.redis.publish(channel, message)
+
+    def _listen_to_channel(self, subscriber, handler):
+        for message in subscriber.listen():
+            if message["type"] == "message":
+                handler(message["data"])
+
 class UserPool():
     def __init__(self):
         self.user_models = {}
+        self.data_store = RedisAdapter()
+
 
     def register_user(self, username, ws):
         """
@@ -175,6 +213,8 @@ class ChatWebSocketServer(WebSocket):
 
 
 user_pool = UserPool()
+
+redis_adapter = RedisAdapter
 
 if __name__ == "__main__":
     server = WSGIServer(('127.0.0.1', 9000), WebSocketWSGIApplication(handler_cls=ChatWebSocketServer))

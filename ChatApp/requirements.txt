@@ -3,3 +3,4 @@ gevent==1.0.2
 greenlet==0.4.7
 mock==1.0.1
 ws4py==0.3.4
+redis

@@ -1,9 +1,7 @@
 import os
 from orm.models import MessageModel
-from server import ChatWebSocketServer, user_pool, ChatMessageController
+from server import ChatWebSocketServer, ChatMessageController, user_pool
 import server
-
-print os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 from orm.models import UserModel
 from client import UIController
 from server import MessageUtils, UserPool
@@ -306,3 +304,16 @@ class ChatWebSocketServerTest(TestCase):
         calls = [call(MessageUtils().make_message("from_user", "first message")),
                  call(MessageUtils().make_message("from_user", "second message"))]
         ws2.send.assert_has_calls(calls, any_order=True)
+
+
+class DataStoreAdapterTest(TestCase):
+    def test_send_message_to_channel(self):
+        ws = MagicMock()
+        ds = server.RedisAdapter()
+        ds.add_connection("username", ws)
+
+        #should publish on redis
+        ds.send_message_to_channel("username", "message")
+
+        ws.send.assert_called_with("message")
+
