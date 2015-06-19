@@ -106,7 +106,6 @@ class ChatMessageControllerTest(TestCase):
         controller = ChatMessageController()
 
         controller.process_message("@to_user some message", ws)
-        gevent.sleep(1)
 
         ws1.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
         ws2.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
@@ -199,23 +198,6 @@ class ChatWebSocketServerTest(TestCase):
 
         ws2.send.assert_has_calls(calls)
 
-    def test_messages_not_delivered_after_user_closes_connection(self):
-        to_username = "unique_username_1"
-        ws1 = ChatWebSocketServer(MagicMock())
-        ws1.opened()
-        ws1.received_message("from_user")
-        ws2 = ChatWebSocketServer(MagicMock())
-        ws2.send = MagicMock()
-        ws2.opened()
-        ws2.received_message(to_username )
-
-        ws2.closed(1000)
-
-        ws1.received_message("@%s secret message" % to_username )
-
-        self.assertEquals(MessageModel.objects.count(), 1)
-        self.assertEquals(MessageModel.objects.get().message_text, "secret message")
-        self.assertFalse(MessageModel.objects.get().delivered)
 
     def test_socket_closed_checks_for_un_authenticated_user(self):
         ws1 = ChatWebSocketServer(MagicMock())

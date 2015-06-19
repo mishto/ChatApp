@@ -71,7 +71,6 @@ class RedisAdapter():
             self.subscriptions[username] = [ws]
 
     def remove_connection(self, username, ws):
-        ws.greenlet_listener.kill()
         self.subscriptions[username].remove(ws)
         if not self.subscriptions[username]:
             self.subscriptions.pop(username, None)
@@ -187,6 +186,8 @@ class ChatWebSocketServer(WebSocket):
 
     def closed(self, code, reason=None):
         self.is_open = False
+        if self.greenlet_listener:
+            self.greenlet_listener.kill()
         self.controller.socket_closed(self)
 
     def received_message(self, message):
