@@ -84,7 +84,7 @@ class ChatConsoleUI(object):
 
 
 if __name__ == "__main__":
-    WEBSOCKET_URL = 'ws://54.173.173.106:9000'
+    WEBSOCKET_URL = 'ws://127.0.0.1:9000'
     PROTOCOLS = ['http-only', 'chat']
 
     ui = ChatConsoleUI()

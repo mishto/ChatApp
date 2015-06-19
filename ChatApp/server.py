@@ -1,5 +1,6 @@
 #from gevent import monkey; monkey.patch_all(socket=True, dns=True, time=True, select=True,thread=False,
 #    os=True, ssl=True, httplib=False, aggressive=True)
+import gevent
 from gevent.greenlet import Greenlet
 import redis
 
@@ -39,10 +40,25 @@ class MessageUtils:
 class RedisAdapter():
     def __init__(self):
         self.subscriptions = {}
+        self.users = {}
         self.redis = redis.StrictRedis(host='localhost', port=6379, db=0)
 
+#    def start_message_listener(self):
+#        subscriber = self.redis.pubsub()
+#        subscriber.psubscribe("@*")
+#        g_listener = Greenlet(self._listen_to_channel, subscriber, ws)
+#        g_listener.start()
+
+
     def is_user_stored(self, username):
-        return username in self.subscriptions.keys()
+        return username in self.users
+
+    def store_user(self, user):
+        if not self.is_user_stored(user.username):
+            self.users[user.username] = user
+
+    def get_user(self, username):
+        return self.users[username]
 
     def add_connection(self, username, ws):
         """
@@ -51,67 +67,37 @@ class RedisAdapter():
 
         subscriber = self.redis.pubsub()
         subscriber.subscribe(username)
-        g_listener = Greenlet(self._listen_to_channel, subscriber, ws.send)
+        g_listener = Greenlet(self._listen_to_channel, subscriber, ws)
         g_listener.start()
         ws.greenlet_listener = g_listener
 
-        if self.is_user_stored(username):
+        if username in self.subscriptions:
             self.subscriptions[username].append(ws)
         else:
             self.subscriptions[username] = [ws]
 
+    def remove_connection(self, username, ws):
+        ws.greenlet_listener.kill()
+        self.subscriptions[username].remove(ws)
+        if not self.subscriptions[username]:
+            self.subscriptions.pop(username, None)
 
     def send_message_to_channel(self, channel, message):
-        self.redis.publish(channel, message)
-
-    def _listen_to_channel(self, subscriber, handler):
-        for message in subscriber.listen():
-            if message["type"] == "message":
-                handler(message["data"])
-
-class UserPool():
-    def __init__(self):
-        self.user_models = {}
-        self.data_store = RedisAdapter()
+        return self.redis.publish(channel, message)
 
 
-    def register_user(self, username, ws):
-        """
-        If a user with the username exists already in self.users
-        add the ws to the user's list of sockets.
-        Otherwise create a new user (and save to database if not there) with the given socket.
-        """
+    def _listen_to_channel(self, subscriber, ws):
+        while True:
+            message = subscriber.get_message()
+            if message and message["type"] == "message":
+                ws.send(message["data"])
 
-        if username not in self.user_models:
-            user, dummy = UserModel.objects.get_or_create(username = username)
+            if not ws.is_open:
+                subscriber.unsubscribe()
+                return
 
-            self.user_models[username] = user
+            gevent.sleep(0)
 
-        self.user_models[username].sockets.append(ws)
-
-        ws.user = self.user_models[username]
-
-    def unregister(self, username, ws):
-        self.user_models[username].sockets.remove(ws)
-        if not self.user_models[username].sockets:
-            self.user_models.pop(username, None)
-
-
-    def find_user(self, username):
-        """
-        Attempts to find user with correct username in the cache or in the database.
-        If the user is in the cache it will have one or more associated websocket connections.
-        """
-        if username in self.user_models:
-            return self.user_models[username]
-
-        else:
-            user =  UserModel.objects.filter(username = username)
-            if user:
-                user = user[0]
-                return user
-
-        raise Exception("User does not exist.")
 
 
 class ChatMessageController(object):
@@ -122,7 +108,11 @@ class ChatMessageController(object):
 
         try:
             to_username, message_text = MessageUtils().parse_message(message)
-            to_user = user_pool.find_user(to_username)
+            if redis_adapter.is_user_stored(to_username):
+                to_user = redis_adapter.get_user(to_username)
+            else:
+                to_user = UserModel.objects.get(username = to_username)
+
             msg = MessageModel(from_user=ws.user, to_user=to_user, message_text=message_text)
             msg.delivered = self._route_message(msg)
             msg.save()
@@ -132,16 +122,11 @@ class ChatMessageController(object):
 
     def socket_closed(self, ws):
         if ws.user:
-            user_pool.unregister(ws.user.username, ws)
+            redis_adapter.remove_connection(ws.user.username, ws)
 
     def _route_message(self, msg):
-        delivered = False
-
-        for ws in msg.to_user.sockets:
-            message = MessageUtils().make_message(msg.from_user.username, msg.message_text)
-            ws.send(message)
-            delivered = True
-
+        message = MessageUtils().make_message(msg.from_user.username, msg.message_text)
+        delivered = redis_adapter.send_message_to_channel(msg.to_user.username, message)
         return delivered
 
 
@@ -166,9 +151,11 @@ class AuthenticateMessageController(object):
     def _authenticate_socket(self, message, ws):
         username = Authentication().authenticate(username = message)
         if username:
+            user, _ = UserModel.objects.get_or_create(username = username)
             ws.authenticated = True
-            user_pool.register_user(username, ws)
-
+            ws.user = user
+            redis_adapter.add_connection(username, ws)
+            redis_adapter.store_user(user)
         else:
             ws.send("Invalid username.")
 
@@ -196,13 +183,20 @@ class ChatWebSocketServer(WebSocket):
         WebSocket.__init__(self, *args, **kwargs)
         self.controller = AuthenticateMessageController()
         self.user = None
+        self.greenlet_listener = None
+        self.is_open= False
 
+    def _kill_greenlet_listener(self):
+        if self.greenlet_listener:
+            self.greenlet_listener.kill()
 
     def opened(self):
         self.send("Welcome to ChatServer.")
         self.send("To authenticate enter your username.")
+        self.is_open = True
 
     def closed(self, code, reason=None):
+        self.is_open = False
         self.controller.socket_closed(self)
 
     def received_message(self, message):
@@ -212,9 +206,7 @@ class ChatWebSocketServer(WebSocket):
         self.controller = ChatMessageController()
 
 
-user_pool = UserPool()
-
-redis_adapter = RedisAdapter
+redis_adapter = RedisAdapter()
 
 if __name__ == "__main__":
     server = WSGIServer(('127.0.0.1', 9000), WebSocketWSGIApplication(handler_cls=ChatWebSocketServer))

@@ -1,10 +1,14 @@
+import gc
+from greenlet import greenlet
+import gevent
+from gevent.greenlet import Greenlet
 import os
 from orm.models import MessageModel
-from server import ChatWebSocketServer, ChatMessageController, user_pool
+from server import ChatWebSocketServer, ChatMessageController
 import server
 from orm.models import UserModel
 from client import UIController
-from server import MessageUtils, UserPool
+from server import MessageUtils
 from mock import MagicMock, call
 from django.test import TestCase
 
@@ -84,75 +88,41 @@ class MessageUtilsTest(TestCase):
         self.assertRaises(Exception, MessageUtils().parse_message, message)
 
 
-class UserPoolTest(TestCase):
-    def test_create_user(self):
-        connection = MagicMock()
-        user_pool = UserPool()
-        user_pool.register_user("username", connection)
-
-        user = user_pool.find_user("username")
-        self.assertEquals(user.sockets[0], connection)
-
-
-    def test_create_user_when_username_already_taken(self):
-        ws1 = MagicMock()
-        ws2 = MagicMock()
-        user_pool = UserPool()
-        user_pool.register_user("username", ws1)
-        user_pool.register_user("username", ws2)
-
-        user = user_pool.find_user("username")
-        self.assertEquals(set(user.sockets), {ws1, ws2})
-
-    def test_user_removed_from_pool_on_all_ws_close(self):
-        ws1 = MagicMock()
-        ws2 = MagicMock()
-        user_pool = UserPool()
-        user_pool.register_user("username", ws1)
-        user_pool.register_user("username", ws2)
-
-        user = user_pool.find_user("username")
-        self.assertEquals(set(user.sockets), {ws1, ws2})
-
-        user_pool.unregister("username", ws1)
-
-        user = user_pool.find_user("username")
-        self.assertEquals(user.sockets, [ws2])
-
-        user_pool.unregister("username", ws2)
-        self.assertFalse ("username" in user_pool.user_models)
-
-
-
 class ChatMessageControllerTest(TestCase):
     def setUp(self):
-        server.user_pool = UserPool()
+        kill_greenlets()
+        self.from_user = UserModel.objects.create(username = "from_user")
+        self.to_user = UserModel.objects.create(username = "to_user")
 
     def test_route_message_sends_message_to_every_user_socket(self):
         ws = MagicMock()
-        server.user_pool.register_user("from_user", ws)
-
+        ws.user = self.from_user
         ws1 = MagicMock()
         ws2 = MagicMock()
-        server.user_pool.register_user("to_user", ws1)
-        server.user_pool.register_user("to_user", ws2)
+
+        server.redis_adapter.add_connection("to_user", ws1)
+        server.redis_adapter.add_connection("to_user", ws2)
+        server.redis_adapter.store_user(self.to_user)
         controller = ChatMessageController()
 
         controller.process_message("@to_user some message", ws)
+        gevent.sleep(1)
 
         ws1.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
         ws2.send.assert_called_with(MessageUtils().make_message("from_user", "some message"))
 
 
     def test_send_message_saves_message_when_user_in_pool(self):
-        ws = MagicMock()
         controller = ChatMessageController()
 
-        ws1 = MagicMock()
-        server.user_pool.register_user("from_user", ws1)
+        ws = MagicMock()
+        ws.user = self.from_user
 
-        server.user_pool.register_user("to_user", ws)
-        controller.process_message("@to_user some message", ws1)
+        server.redis_adapter.store_user(self.to_user)
+        server.redis_adapter.add_connection("to_user", MagicMock())
+
+        controller.process_message("@to_user some message", ws)
+
         self.assertEquals(MessageModel.objects.count(), 1)
         self.assertTrue(MessageModel.objects.get().delivered)
 
@@ -160,11 +130,7 @@ class ChatMessageControllerTest(TestCase):
         controller = ChatMessageController()
 
         ws = MagicMock()
-        server.user_pool.register_user("from_user", ws)
-
-        from_user = UserModel(username = "to_user")
-        from_user.save()
-
+        ws.user = self.from_user
 
         controller.process_message("@to_user some message", ws)
         self.assertEquals(MessageModel.objects.count(), 1)
@@ -174,23 +140,13 @@ class ChatMessageControllerTest(TestCase):
         ws = MagicMock()
         ws.send = MagicMock()
 
-        user_pool.register_user("from_user", ws)
-
-        from_user = UserModel(username = "to_user")
-        from_user.save()
-
         ChatMessageController().process_message("@wrong_user some message", ws)
         self.assertEquals(MessageModel.objects.count(), 0)
-        ws.send.assert_called_with("User does not exist.")
+        ws.send.assert_called_with('UserModel matching query does not exist.')
 
     def test_sends_error_message_when_cannot_parse_msg(self):
         ws = MagicMock()
         ws.send = MagicMock()
-
-        user_pool.register_user("from_user", ws)
-
-        from_user = UserModel(username = "to_user")
-        from_user.save()
 
         ChatMessageController().process_message("bad message", ws)
         self.assertEquals(MessageModel.objects.count(), 0)
@@ -199,7 +155,8 @@ class ChatMessageControllerTest(TestCase):
 
 class ChatWebSocketServerTest(TestCase):
     def setUp(self):
-        server.user_pool = UserPool()
+        kill_greenlets()
+        server.redis_adapter = server.RedisAdapter()
 
     def test_user_created_when_first_auth(self):
         ws = ChatWebSocketServer(MagicMock())
@@ -239,15 +196,18 @@ class ChatWebSocketServerTest(TestCase):
         ws2.send.assert_called_with(MessageUtils().make_message("from_user", "secret message"))
 
     def test_messages_not_delivered_after_user_closes_connection(self):
+        to_username = "unique_username_1"
         ws1 = ChatWebSocketServer(MagicMock())
         ws1.received_message("from_user")
         ws2 = ChatWebSocketServer(MagicMock())
         ws2.send = MagicMock()
-        ws2.received_message("to_user")
+        ws2.opened()
+        ws2.received_message(to_username )
 
         ws2.closed(1000)
+        gevent.sleep(1)
 
-        ws1.received_message("@to_user secret message")
+        ws1.received_message("@%s secret message" % to_username )
 
         self.assertEquals(MessageModel.objects.count(), 1)
         self.assertEquals(MessageModel.objects.get().message_text, "secret message")
@@ -269,7 +229,7 @@ class ChatWebSocketServerTest(TestCase):
         ws.received_message("to_user")
 
 
-    def test_user_receives_offline_messages_when_connecting(self):
+    def _test_user_receives_offline_messages_when_connecting(self):
         ws1 = ChatWebSocketServer(MagicMock())
         ws1.received_message("from_user")
 
@@ -317,3 +277,7 @@ class DataStoreAdapterTest(TestCase):
 
         ws.send.assert_called_with("message")
 
+def kill_greenlets():
+    for ob in gc.get_objects():
+        if isinstance(ob, Greenlet):
+            ob.kill()
