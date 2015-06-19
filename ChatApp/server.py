@@ -3,6 +3,7 @@
 import gevent
 from gevent.greenlet import Greenlet
 import redis
+import sys
 
 from orm.models import UserModel, MessageModel
 from ws4py.websocket import WebSocket
@@ -42,13 +43,6 @@ class RedisAdapter():
         self.subscriptions = {}
         self.users = {}
         self.redis = redis.StrictRedis(host='localhost', port=6379, db=0)
-
-#    def start_message_listener(self):
-#        subscriber = self.redis.pubsub()
-#        subscriber.psubscribe("@*")
-#        g_listener = Greenlet(self._listen_to_channel, subscriber, ws)
-#        g_listener.start()
-
 
     def is_user_stored(self, username):
         return username in self.users
@@ -186,10 +180,6 @@ class ChatWebSocketServer(WebSocket):
         self.greenlet_listener = None
         self.is_open= False
 
-    def _kill_greenlet_listener(self):
-        if self.greenlet_listener:
-            self.greenlet_listener.kill()
-
     def opened(self):
         self.send("Welcome to ChatServer.")
         self.send("To authenticate enter your username.")
@@ -209,6 +199,11 @@ class ChatWebSocketServer(WebSocket):
 redis_adapter = RedisAdapter()
 
 if __name__ == "__main__":
-    server = WSGIServer(('127.0.0.1', 9000), WebSocketWSGIApplication(handler_cls=ChatWebSocketServer))
+    if len(sys.argv) == 2:
+        port = int(sys.argv[1])
+    else:
+        port = 9000
+
+    server = WSGIServer(('127.0.0.1', port), WebSocketWSGIApplication(handler_cls=ChatWebSocketServer))
     server.serve_forever()
 

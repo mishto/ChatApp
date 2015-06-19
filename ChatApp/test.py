@@ -179,6 +179,7 @@ class ChatWebSocketServerTest(TestCase):
 
         #auth to_user
         ws2 = ChatWebSocketServer(MagicMock())
+        ws2.opened()
         ws2.send = MagicMock()
         ws2.received_message("to_user")
 
@@ -193,11 +194,15 @@ class ChatWebSocketServerTest(TestCase):
         self.assertTrue(MessageModel.objects.get().delivered)
 
         #and indeed the send function for to_user has been called
-        ws2.send.assert_called_with(MessageUtils().make_message("from_user", "secret message"))
+        calls = [call("Authentication successful.  Write a message like this: '@username your message' "),
+                 call(MessageUtils().make_message("from_user", "secret message"))]
+
+        ws2.send.assert_has_calls(calls)
 
     def test_messages_not_delivered_after_user_closes_connection(self):
         to_username = "unique_username_1"
         ws1 = ChatWebSocketServer(MagicMock())
+        ws1.opened()
         ws1.received_message("from_user")
         ws2 = ChatWebSocketServer(MagicMock())
         ws2.send = MagicMock()
@@ -205,7 +210,6 @@ class ChatWebSocketServerTest(TestCase):
         ws2.received_message(to_username )
 
         ws2.closed(1000)
-        gevent.sleep(1)
 
         ws1.received_message("@%s secret message" % to_username )
 
